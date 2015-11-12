@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+      <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+      <title>Graphics Class Virtual Reality</title>
+      <style>
+          body {
+            margin: 0px;
+            overflow: hidden;
+          }
+          #container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #000000;
+          }
+
+          #container:-webkit-full-screen { width: 100% }
+
+          #webgl {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+          }
+          video {
+            position: absolute;
+            visibility: hidden;
+          }
+          #leftcam {
+            position: absolute;
+          }
+          #rightcam {
+            position: absolute;
+          }
+          #posinfo {
+               position: absolute;
+              bottom: 0;
+              left:0;
+           }
+      </style>
+
+      <script src="libs/three.min.js"></script>
+      <script src="libs/svd.js"></script>
+      <script src="libs/posit1-patched.js"></script>
+      <script src="libs/StereoEffect.js"></script>
+      <script src="libs/OrbitControls.js"></script>
+      <script src="libs/DeviceOrientationControls.js"></script>
+      <script src="libs/ColladaLoader.js"></script>
+      <script src="libs/helvetiker_regular.typeface.js"></script>
+      <script src="libs/cv.js"></script>
+      <script src="libs/aruco.js"></script>
+
+  </head>
+  <body>
+    <div id="container">
+        <video id="video" style="visibility: hidden;" autoplay="" width="800" height="600"></video>
+        <canvas id="leftcam" width="800" height="600"></canvas>
+        <canvas id="rightcam" width="800" height="600"></canvas>
+        <div id="webgl"></div>
+        <div id="centerline" style="position: absolute; width: 3px; background-color: #222222;"></div>
+        <div id="posinfo" style="background-color: yellow; width: 0px; height: 0px;"></div>
+    </div>
+
+    <script>
+        //////////////////////////////////////////////////////////////////////////////////
+        //		GLOBAL Variables ---> Back practice I know
+        //////////////////////////////////////////////////////////////////////////////////
+
+
+        //WebGL scene setup variables
+        var camera, scene, renderer, controls;
+
+        //WebGL objects
+        var gridHelper, world_coords, drone;
+
+        //Control Locks
+        var element, working = false, seen = false;
+
+        //Stat Variables
+        var startTime	= Date.now();
+        var clock, posinfo, object, data, test = 0;
+
+
+        //HTML Containers
+        var container, divwebgl, leftcam, rightcam, centerline, elementLeft, elementRight;
+
+        //Size Variables
+        var screenWidth;
+        var screenHeight;
+        var screenHalfWidth;
+        var screenHalfHeight;
+        var verticalMargin;
+        var cameraImage;
+        var cameraImageContext;
+        var myTime = 0;
+
+        //webcam variables
+        var leftCamCanvas;
+        var leftCamContext;
+        var rightCamCanvas;
+        var rightCamContext;
+        var video;
+        var imageData;
+        var context;
+        var detector;
+        var  markerObject3D;
+
+
+        var _position = new THREE.Vector3();
+        var _quaternion = new THREE.Quaternion();
+        var _scale = new THREE.Vector3();
+
+        //Calibration Variables
+        var averagePoint = new THREE.Vector3(0, 0, 0);
+        var calibrated = false, calibrationLoop = 1;
+
+        //Webworker Variable --> Multi threading Javascript
+        var myWorker;
+
+        var videoPlaying = false;
+        clock = new THREE.Clock();
+        init();
+        animate();
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Init function ----> Lets get this program ready
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function init() {
+            container = document.getElementById('container');
+            leftcam = document.getElementById('leftcam');
+            rightcam = document.getElementById('rightcam');
+
+            centerline = document.getElementById('centerline');
+
+            leftCamCanvas = document.getElementById("leftcam");
+            leftCamContext = leftCamCanvas.getContext("2d");
+            rightCamCanvas = document.getElementById("rightcam");
+            rightCamContext = rightCamCanvas.getContext("2d");
+            video = document.getElementById("video");
+
+            posinfo = document.getElementById("posinfo");
+            posinfo.innerHTML = 'x: <br>  y: <br> z:';
+
+
+            cameraImage = document.createElement('canvas');
+            cameraImage.setAttribute("width", "640");
+            cameraImage.setAttribute("height", "480");
+            cameraImage.width = 640;
+            cameraImage.height = 480;
+            cameraImageContext = cameraImage.getContext("2d");
+
+
+            renderer	= new THREE.WebGLRenderer({
+                antialias	: true,
+                alpha		: true,
+            });
+       //     renderer.setSize( window.innerWidth, window.innerHeight );
+            renderer.setClearColor( 0x000000, 0 );
+
+            element = renderer.domElement;
+
+            divwebgl = document.getElementById('webgl');
+            divwebgl.appendChild(element);
+
+
+
+            var onRenderFcts = [];
+            // init scene and camera
+            scene = new THREE.Scene();
+            camera	= new THREE.PerspectiveCamera(90, 1, 0.001, 700);
+            camera.position.set(0, 10, 0);
+            scene.add( camera );
+
+
+
+            var light = new THREE.HemisphereLight(0x777777, 0x000000, 0.6);
+            scene.add(light);
+
+            gridHelper = createGrid(10, 1, 0, -1, -50);
+            gridHelper.visible = true;
+            scene.add(gridHelper);
+
+
+            world_coords = createAxis(5, 5, 0, 0, 0);
+
+            world_coords.visible = true;
+            world_coords.position.z = -10;
+            world_coords.position.y = 0;
+
+            camera.add(world_coords);
+
+            console.log(world_coords.position.x);
+            console.log(world_coords.position.y);
+            console.log(world_coords.position.z);
+            var jsonLoader = new THREE.JSONLoader();
+            jsonLoader.load( "models/ARDrone.three.json", addModelToScene );
+
+            controls = new THREE.OrbitControls(camera, element);
+            controls.target.set(
+                    camera.position.x + 0.1,
+                    camera.position.y,
+                    camera.position.z
+            );
+            controls.noPan = true;
+            controls.noZoom = true;
+
+            //////////////////////////////////////////////////////////////////////////////////
+            //		This is the Smart Phones orientation --> Don't Delete
+            //////////////////////////////////////////////////////////////////////////////////
+
+
+            window.addEventListener('deviceorientation', setOrientationControls, true);
+
+            function setOrientationControls(e) {
+                if (!e.alpha) {
+                    return;
+                }
+
+                controls = new THREE.DeviceOrientationControls(camera, true);
+                controls.connect();
+                controls.update();
+
+                window.removeEventListener('deviceorientation', setOrientationControls, true);
+            }
+            window.addEventListener('deviceorientation', setOrientationControls, true);
+
+
+            resize();
+
+            console.log("WebWorker: Starting");
+            myWorker = new Worker("markerfinder.js");
+            myWorker.addEventListener("message", markerHandler, false);
+        }
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Resize function ----> Set our elements to the correct size
+        //////////////////////////////////////////////////////////////////////////////////
+
+
+        function resize() {
+            screenWidth = container.offsetWidth; //window.innerWidth;
+            screenHeight = container.offsetHeight; //window.innerHeight;
+            screenHalfWidth = ((screenWidth / 2) | 0);
+            screenHalfHeight = ((screenHeight / 2) | 0);
+
+
+            var cameraImageWidth = 800;
+            var cameraImageHeight = 600;
+
+            cameraImage.width = cameraImageWidth;
+            cameraImage.height = cameraImageHeight;
+            cameraImage.setAttribute("width", '' + cameraImageWidth);
+            cameraImage.setAttribute("height", '' + cameraImageHeight);
+            cameraImage.style.width = cameraImageWidth + 'px';
+            cameraImage.style.height = cameraImageHeight + 'px';
+
+            leftcam.style.left = 0 + 'px';
+            leftcam.style.top = 0 + 'px';
+            leftcam.width = screenHalfWidth;
+            leftcam.height = screenHeight;
+            leftcam.style.width = screenHalfWidth + 'px';
+            leftcam.style.height = screenHeight  + 'px';
+
+            rightcam.style.left = screenHalfWidth  + 'px';
+            rightcam.style.top = 0 + 'px';
+            rightcam.width = screenHalfWidth;
+            rightcam.height = screenHeight;
+            rightcam.style.width = screenHalfWidth  + 'px';
+            rightcam.style.height = screenHeight  + 'px';
+
+
+            centerline.style.left = (screenHalfWidth - 1) + 'px';
+            centerline.style.top = 0 + 'px';
+            centerline.style.height = screenHeight + 'px';
+
+
+            divwebgl.style.left = 0 + 'px';
+            divwebgl.style.top = 0 + 'px';
+            divwebgl.width = screenWidth;
+            divwebgl.height = screenHeight;
+            divwebgl.style.width = screenWidth + 'px';
+            divwebgl.style.height = screenHeight  + 'px';
+
+
+            camera.aspect = screenHalfWidth / screenHeight;
+            camera.updateProjectionMatrix();
+
+            renderer.autoClear = false;
+            renderer.setSize(screenWidth, screenHeight);
+
+        }
+
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		This is our rendering loop ----> several functions called from here
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function animate() {
+            requestAnimationFrame(animate);
+            update(clock.getDelta());
+            render(clock.getDelta());
+           // posinfo.innerHTML = getStats();
+            }
+
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		This function takes camera from webRTC (getUsermedia) and paints it to the canvas
+        //////////////////////////////////////////////////////////////////////////////////
+
+
+        function camCapture() {
+            if (videoPlaying) {
+                cameraImageContext.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, cameraImage.width, cameraImage.height);
+                imageData = cameraImageContext.getImageData(0, 0, cameraImage.width, cameraImage.height);
+
+                if (calibrated === false && working === false) {
+                    working = true;
+                    myWorker.postMessage({'image': imageData, 'width': cameraImage.width, 'height': cameraImage.height});
+                }
+                if (calibrated === true)
+                {
+
+                    myTime += clock.getDelta();
+                    if(myTime > 6) {
+                        if (drone.position.y < 14) {
+                            drone.position.y += 0.1;
+                        }
+                        else {
+                            drone.position.z += 0.1;
+                        }
+                    }
+                    console.log(myTime);
+
+                }
+            }
+        }
+
+        function calibratePoint() {
+            if (calibrated === false) {
+                calibrated = true;
+                var pose = data.pose;
+
+                world_coords.rotation.x = -Math.asin(-pose.bestRotation[1][2]);
+                world_coords.rotation.y = -Math.atan2(pose.bestRotation[0][2], pose.bestRotation[2][2]);
+                world_coords.rotation.z = Math.atan2(pose.bestRotation[1][0], pose.bestRotation[1][1]);
+              //  world_coords.rotation.x += -Math.PI / 2;
+
+
+                drone.rotation.x = -Math.asin(-pose.bestRotation[1][2]);
+                drone.rotation.y = -Math.atan2(pose.bestRotation[0][2], pose.bestRotation[2][2]);
+                drone.rotation.z = Math.atan2(pose.bestRotation[1][0], pose.bestRotation[1][1]);
+                drone.rotation.x += -Math.PI / 2;
+
+                world_coords.position.x = pose.bestTranslation[0];
+                world_coords.position.y = pose.bestTranslation[1];
+                world_coords.position.z = -pose.bestTranslation[2];
+
+
+                drone.position.x = pose.bestTranslation[0];
+                drone.position.y = pose.bestTranslation[1];
+                drone.position.z = -pose.bestTranslation[2];
+
+                scene.updateMatrixWorld();
+                camera.updateMatrixWorld();
+               // drone.updateMatrixWorld();
+               // world_coords.updateMatrixWorld();
+                THREE.SceneUtils.detach(drone, camera, scene);
+                THREE.SceneUtils.detach(world_coords, camera, scene);
+
+
+                //THREE.SceneUtils.detach(world_coords, camera, scene);
+             /*   scene.updateMatrixWorld();
+                camera.updateMatrixWorld();
+                world_coords.updateMatrixWorld();
+                world_coords.matrixWorld.decompose(_position, _quaternion, _scale);
+*/
+
+          /*      cameraImageContext.lineWidth = 3;
+
+                var corners = data.markers[0].corners;
+
+                cameraImageContext.strokeStyle = "red";
+                cameraImageContext.beginPath();
+
+                for (j = 0; j < corners.length; ++j) {
+                    corner = corners[j];
+                    cameraImageContext.moveTo(corner.x, corner.y);
+                    corner = corners[(j + 1) % corners.length];
+                    cameraImageContext.lineTo(corner.x, corner.y);
+                }
+
+                cameraImageContext.stroke();
+                cameraImageContext.closePath();
+
+                cameraImageContext.strokeStyle = "green";
+                cameraImageContext.strokeRect(corners[0].x - 2, corners[0].y - 2, 4, 4);
+
+                drone.quaternion.copy( _quaternion );
+                drone.rotation.x += -Math.PI / 2;
+                drone.position.copy(_position );
+
+                drone.visible = true;
+
+                gridHelper.quaternion.copy( _quaternion );
+                gridHelper.rotation.x += -Math.PI / 2;
+                gridHelper.position.copy(_position );
+
+                gridHelper.visible = true;
+
+                */
+
+                }
+
+        }
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Paint the altered image to the left and right canvas
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function paintCanvas(){
+              leftCamContext.drawImage(cameraImage, 0, 0, cameraImage.width, cameraImage.height, 0, 0, leftcam.width, leftcam.height);
+              rightCamContext.drawImage(cameraImage, 0, 0, cameraImage.width, cameraImage.height, 0, 0, leftcam.width, leftcam.height);
+        }
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		update loop
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function update(dt) {
+           // resize();
+            camera.updateProjectionMatrix();
+            controls.update(dt);
+        }
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		The actual render loop
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function render(dt) {
+
+            camCapture();
+
+            paintCanvas();
+
+
+            renderer.setViewport( 0, 0, screenWidth , screenHeight );
+            renderer.clear();
+
+            renderer.setViewport( 0, 0, screenHalfWidth, screenHeight );
+            renderer.render( scene, camera );
+
+            renderer.setViewport( screenHalfWidth, 0, screenHalfWidth, screenHeight );
+            renderer.render( scene, camera);
+        }
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Calback function for webwork
+        //////////////////////////////////////////////////////////////////////////////////
+
+
+        function markerHandler(event) {
+            data = event.data;
+            //console.log(data.malength);
+            if( parseInt(data.markers.length) > 0 )
+            {
+                calibratePoint(data);
+            }
+            working = false;
+        }
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Calback function to initiate camera onload
+        //////////////////////////////////////////////////////////////////////////////////
+
+        window.addEventListener("DOMContentLoaded", function() {
+          var getUserMedia = navigator.getUserMedia ? function(a, b, c) { navigator.getUserMedia(a, b, c); } : (navigator.webkitGetUserMedia ? function(a, b, c) { navigator.webkitGetUserMedia(a, b, c); } : null);
+          if (getUserMedia != null) {
+            MediaStreamTrack.getSources(function(sourceInfos) {
+              var videoSource = null;
+              for (var i = 0; i < sourceInfos.length; i++) {
+                var sourceInfo = sourceInfos[i];
+                //console.log('source: ', sourceInfo);
+                if (sourceInfo.kind === 'video') {
+                  //console.log(sourceInfo.id, sourceInfo.label || 'camera');
+                  videoSource = sourceInfo.id;
+                  //break; // uncomment for selecting the first one.
+                }
+              }
+
+              if (videoSource != null)
+              {
+                getUserMedia.call(this,
+                  {
+                    video: {
+                      optional: [
+                        { sourceId: videoSource },
+                        { minWidth: 640 },
+                        { maxWidth: 640 },
+                        { minHeight: 480 },
+                        { maxHeight: 480 }
+                      ]
+                    },
+                    //video: true,
+                    audio: false
+                  },
+                  function(stream) {
+                      video.src = window.URL.createObjectURL(stream);
+                      video.play();
+
+                      videoPlaying = true;
+                  },
+                  function(error) {
+                      videoPlaying = false;
+                  }
+                );
+              }
+            });
+          }
+        });
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Aruco Corner Drawing Function
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function drawCorners(markers){
+            var corners, corner, i, j;
+
+            context.lineWidth = 3;
+
+            for (i = 0; i < markers.length; ++ i){
+                corners = markers[i].corners;
+
+                context.strokeStyle = "red";
+                context.beginPath();
+
+                for (j = 0; j < corners.length; ++ j){
+                    corner = corners[j];
+                    context.moveTo(corner.x, corner.y);
+                    corner = corners[(j + 1) % corners.length];
+                    context.lineTo(corner.x, corner.y);
+                }
+
+                context.stroke();
+                context.closePath();
+
+                context.strokeStyle = "green";
+                context.strokeRect(corners[0].x - 2, corners[0].y - 2, 4, 4);
+            }
+        }
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Calback function for JSON model loader
+        //////////////////////////////////////////////////////////////////////////////////
+
+
+        function addModelToScene( geometry, materials )
+        {
+            material = new THREE.MeshFaceMaterial( materials );
+            drone = new THREE.Mesh( geometry, material );
+            drone.scale.set(0.1, 0.1, 0.1);
+            camera.add( drone );
+            drone.position.z = -20;
+            drone.position.y = 0;
+            drone.visible = true;
+        }
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Grid for quadcopter model (The Landing pad)
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function createGrid(size, step, x, y, z) {
+
+            var grid = new THREE.GridHelper(size, step, x, y, z);
+            grid.position.z = z;
+            grid.position.y = y;
+            grid.visible = true;
+
+            return grid;
+        }
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Axis marker to show pose
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function createAxis(scale, lineWidth, x, y, z) {
+            var axis = new THREE.AxisHelper(scale);
+            axis.material.linewidth = lineWidth;
+
+            return axis;
+        }
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //		Debug Function
+        //////////////////////////////////////////////////////////////////////////////////
+
+        function getStats() {
+            var stats =    'x:' + camera.rotation.x
+                    + ' y:' + camera.rotation.y
+                    + ' z:' + camera.rotation.z
+                    + ' <br> yaw: ' + Math.round(-( camera.rotation.x) * 180.0/Math.PI)
+                    + '   pitch:' + Math.round(-( camera.rotation.y) * 180.0/Math.PI)
+                    + '   roll:' + Math.round((camera.rotation.z) * 180.0/Math.PI)
+                    + '<br> cam position x: ' + camera.position.x
+                    + '  cam position y: ' + camera.position.y
+                    + '  cam position z: ' + camera.position.z;
+            return stats;
+        }
+
+    </script>
+  </body>
+</html>

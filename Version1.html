@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+    <title>Graphics Class Virtual Reality</title>
+    <style>
+      body {
+        margin: 0px;
+        overflow: hidden;
+      }
+      #container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #000000;
+      }
+
+      #container:-webkit-full-screen { width: 100% }
+
+      #webgl {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+      }
+      video {
+        position: absolute;
+        visibility: hidden;
+      }
+      #leftcam {
+        position: absolute;
+      }
+      #rightcam {
+        position: absolute;
+      }
+      #posinfo {
+           position: absolute;
+          bottom: 0;
+          left:0;
+       }
+    </style>
+  </head>
+  <body>
+  <div id="container">
+      <video id="video" style="visibility: hidden;" autoplay="" width="800" height="600"></video>
+      <canvas id="leftcam" width="800" height="600"></canvas>
+      <canvas id="rightcam" width="800" height="600"></canvas>
+      <div id="centerline" style="position: absolute; width: 3px; background-color: #222222;"></div>
+  </div>
+  <div id="webgl"></div>
+  <div id="posinfo" style="background-color: yellow; width: 0px; height: 0px;"></div>
+
+  <script src="libs/three.min.js"></script>
+  <script src="libs/svd.js"></script>
+  <script src="libs/posit1-patched.js"></script>
+  <script src="libs/StereoEffect.js"></script>
+  <script src="libs/OrbitControls.js"></script>
+  <script src="libs/DeviceOrientationControls.js"></script>
+  <script src="libs/ColladaLoader.js"></script>
+ <!-- <script src="libs/navigateControl.js"></script>
+  <script src="libs/tween.js"></script> -->
+  <script src="libs/helvetiker_regular.typeface.js"></script>
+  <script src="libs/cv.js"></script>
+  <script src="libs/aruco.js"></script>
+  
+  <script>
+
+    var camera, scene, renderer, getcamera = 0;
+    var effect, controls, context, imageData, detector;
+    var cameraMesh, element, working = false, lookingAtGround = false, seen = false, calibrated = false;
+
+    var startTime	= Date.now();
+    var cube, clock, posinfo, object, data, plane, floor, greenguy, dae;
+
+    var container, divwebgl, leftcam, rightcam, centerline;
+
+    var screenWidth;
+    var screenHeight;
+    var screenHalfWidth;
+    var screenHalfHeight;
+    var verticalMargin;
+    var cameraImage;
+    var cameraImageContext;
+
+    var leftCamCanvas;
+    var leftCamContext;
+    var rightCamCanvas;
+    var rightCamContext;
+    var video;
+
+    var videoPlaying = false;
+    var fullScreenRequested = false;
+    clock = new THREE.Clock();
+    init();
+    animate();
+
+    function init() {
+        container = document.getElementById('container');
+        leftcam = document.getElementById('leftcam');
+        rightcam = document.getElementById('rightcam');
+
+        centerline = document.getElementById('centerline');
+
+        leftCamCanvas = document.getElementById("leftcam");
+        leftCamContext = leftCamCanvas.getContext("2d");
+        rightCamCanvas = document.getElementById("rightcam");
+        rightCamContext = rightCamCanvas.getContext("2d");
+        video = document.getElementById("video");
+
+        posinfo = document.getElementById("posinfo");
+        posinfo.innerHTML = 'x: <br>  y: <br> z:';
+
+
+        cameraImage = document.createElement('canvas');
+        cameraImage.setAttribute("width", "640");
+        cameraImage.setAttribute("height", "480");
+        cameraImage.width = 640;
+        cameraImage.height = 480;
+        cameraImageContext = cameraImage.getContext("2d");
+
+
+
+        renderer = new THREE.WebGLRenderer({antialias: true, alpha: true});
+        renderer.setClearColor( 0x000000, 0 );
+
+        element = renderer.domElement;
+        divwebgl = document.getElementById('webgl');
+        divwebgl.appendChild(element);
+
+
+        effect = new THREE.StereoEffect(renderer);
+
+
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(90, 1, 0.001, 700);
+        //camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.001, 700);
+        camera.position.set(0, 20, 0);
+
+
+        var light = new THREE.HemisphereLight(0x777777, 0x000000, 0.6);
+        scene.add(light);
+
+
+        plane = new THREE.Object3D(),
+                geometry = new THREE.PlaneBufferGeometry(20.0, 20.0, 0.0),
+                material = new THREE.MeshNormalMaterial(),
+                mesh = new THREE.Mesh(geometry, material);
+
+        //  plane.add(mesh);
+        // plane.rotation.z += 11;
+        camera.add(plane);
+        plane.position.set(0,0,-50);
+
+        scene.add(camera);
+
+
+        var size = 2;
+        var step = 1;
+
+        var gridHelper = new THREE.GridHelper( size, step );
+        scene.add( gridHelper );
+        gridHelper.position.z = 10;
+
+
+        cube = new THREE.Mesh( new THREE.BoxGeometry( 4, 4, 4 ), new THREE.MeshNormalMaterial() );
+        cube.position.y = 0;
+        cube.position.x = -50;
+
+        scene.add( cube );
+
+
+        var jsonLoader = new THREE.JSONLoader();
+        jsonLoader.load( "models/greenguy.js", addModelToScene );
+
+
+       var loader = new THREE.ColladaLoader();
+
+        loader.options.convertUpAxis = true;
+
+        loader.load( 'models/ardrone2.dae', function ( collada ) {
+
+
+            dae = collada.scene;
+
+            var skin = collada.skins[ 0 ];
+
+            dae.position.set(10,0,0);//x,z,y- if you think in blender dimensions ;)
+            dae.scale.set(0.001, 0.001, 0.001);
+
+            scene.add(dae);
+
+        });
+
+
+
+
+
+        controls = new THREE.OrbitControls(camera, element);
+        controls.target.set(
+                //camera.position.x + 0.15,
+                camera.position.x + 0.1,
+                camera.position.y,
+                camera.position.z
+        );
+        controls.noPan = true;
+        controls.noZoom = true;
+
+
+
+        window.addEventListener('deviceorientation', setOrientationControls, true);
+
+        function setOrientationControls(e) {
+            if (!e.alpha) {
+                return;
+            }
+
+            controls = new THREE.DeviceOrientationControls(camera, true);
+            controls.connect();
+            controls.update();
+
+            window.removeEventListener('deviceorientation', setOrientationControls, true);
+        }
+        window.addEventListener('deviceorientation', setOrientationControls, true);
+
+
+        window.addEventListener('resize', resize, false);
+        resize();
+
+        console.log("WebWorker: Starting");
+        myWorker = new Worker("markerfinder.js");
+        myWorker.addEventListener("message", markerHandler, false);
+    }
+
+    function resize() {
+        screenWidth = container.offsetWidth; //window.innerWidth;
+        screenHeight = container.offsetHeight; //window.innerHeight;
+        screenHalfWidth = ((screenWidth / 2) | 0);
+        screenHalfHeight = ((screenHeight / 2) | 0);
+
+
+        var cameraImageWidth = 800;
+        var cameraImageHeight = 600;
+      
+        cameraImage.width = cameraImageWidth;
+        cameraImage.height = cameraImageHeight;
+        cameraImage.setAttribute("width", '' + cameraImageWidth);
+        cameraImage.setAttribute("height", '' + cameraImageHeight);
+        cameraImage.style.width = cameraImageWidth + 'px';
+        cameraImage.style.height = cameraImageHeight + 'px';
+      
+        leftcam.style.left = 0 + 'px';
+        leftcam.style.top = 0 + 'px';
+        leftcam.width = screenHalfWidth;
+        leftcam.height = screenHeight;
+        leftcam.style.width = screenHalfWidth + 'px';
+        leftcam.style.height = screenHeight  + 'px';
+      
+        rightcam.style.left = screenHalfWidth  + 'px';
+        rightcam.style.top = 0 + 'px';
+        rightcam.width = screenHalfWidth;
+        rightcam.height = screenHeight;
+        rightcam.style.width = screenHalfWidth  + 'px';
+        rightcam.style.height = screenHeight  + 'px';
+      
+      /*  divwebgl.style.left = 0 + 'px';
+        divwebgl.style.top = 0 + 'px';
+        divwebgl.style.width = screenWidth + 'px';
+        divwebgl.style.height = screenHeight  + 'px'; */
+
+        centerline.style.left = (screenHalfWidth - 1) + 'px';
+        centerline.style.top = 0 + 'px';
+        centerline.style.height = screenHeight + 'px';
+
+        var width = divwebgl.offsetWidth;
+        var height = divwebgl.offsetHeight;
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+        effect.setSize(width, height);
+
+
+    }
+
+
+    function animate() {
+        // var elapsedSeconds = clock.getElapsedTime();
+        /*  cube.rotation.x += 0.02;
+        cube.rotation.y += 0.0225;
+        cube.rotation.z += 0.0175; */
+        /*  var dtime	= Date.now() - startTime;
+        cube.scale.x	= 1.0 + 0.3*Math.sin(dtime/300);
+        cube.scale.y	= 1.0 + 0.3*Math.sin(dtime/300);
+        cube.scale.z	= 1.0 + 0.3*Math.sin(dtime/300); */
+
+        requestAnimationFrame(animate);
+        update(clock.getDelta());
+        render(clock.getDelta());
+
+        //TWEEN.update();
+
+        getcamera += 1;
+        posinfo.innerHTML = 'x:' + camera.rotation.x
+                + ' y:' + camera.rotation.y
+                + ' z:' + camera.rotation.z
+                + ' <br> yaw: ' + Math.round(-( camera.rotation.x) * 180.0/Math.PI)
+                + '   pitch:' + Math.round(-( camera.rotation.y) * 180.0/Math.PI)
+                + '   roll:' + Math.round((camera.rotation.z) * 180.0/Math.PI)
+                + '<br> cam position x: ' + camera.position.x
+                + '  cam position y: ' + camera.position.y
+                + '  cam position z: ' + camera.position.z
+                + '<br> cube position x: ' + plane.position.x
+                + '  cube position y: ' + plane.position.y
+                + '  cube position z: ' + plane.position.z;
+        }
+
+    function fullscreen(el) {
+      if (!document.fullscreenElement && !document.mozFullScreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement ) {
+        if (el.requestFullscreen) {
+          el.requestFullscreen();
+        } else if (el.msRequestFullscreen) {
+          el.msRequestFullscreen();
+        } else if (el.mozRequestFullScreen) {
+          el.mozRequestFullScreen();
+        } else if (el.webkitRequestFullscreen) {
+          el.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
+        }
+      } else {
+        var toggle = false;
+        if (toggle) {
+          if (document.exitFullscreen) {
+            document.exitFullscreen();
+          } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+          } else if (document.mozCancelFullScreen) {
+            document.mozCancelFullScreen();
+          } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+          }
+        }
+      }
+    }
+
+    var camCaptureState = 0;
+    function camCapture() {
+      if (videoPlaying) {
+          cameraImageContext.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, cameraImage.width, cameraImage.height);
+          imageData = cameraImageContext.getImageData(0, 0, cameraImage.width, cameraImage.height);
+          if (working === false) {
+           //   console.log("Closing Mutex Lock");
+              working = true;
+              myWorker.postMessage({'image': imageData, 'width': cameraImage.width, 'height':  cameraImage.height});
+          }
+
+
+
+          if (seen === true) {
+              //if (calibrated === false) {
+                  var pose = data.pose;
+
+                  plane.rotation.x = -Math.asin(-pose.bestRotation[1][2]);
+                  plane.rotation.y = -Math.atan2(pose.bestRotation[0][2], pose.bestRotation[2][2]);
+                 plane.rotation.z = Math.atan2(pose.bestRotation[1][0], pose.bestRotation[1][1]);
+
+                  plane.position.x = pose.bestTranslation[0];
+                  plane.position.y = pose.bestTranslation[1];
+                  plane.position.z = -pose.bestTranslation[2];
+
+                  cameraImageContext.lineWidth = 3;
+
+                  var corners = data.markers[0].corners;
+
+                  cameraImageContext.strokeStyle = "red";
+                  cameraImageContext.beginPath();
+
+                  for (j = 0; j < corners.length; ++j) {
+                      corner = corners[j];
+                      cameraImageContext.moveTo(corner.x, corner.y);
+                      corner = corners[(j + 1) % corners.length];
+                      cameraImageContext.lineTo(corner.x, corner.y);
+                  }
+
+                  cameraImageContext.stroke();
+                  cameraImageContext.closePath();
+
+                  cameraImageContext.strokeStyle = "green";
+                  cameraImageContext.strokeRect(corners[0].x - 2, corners[0].y - 2, 4, 4);
+                  calibrated = true;
+                  var point = new THREE.Vector3();
+                  plane.localToWorld( point );
+                  console.log(point);
+                  camera.updateMatrixWorld(); // important!
+                  plane.updateMatrixWorld();
+                  var worldmat = new THREE.Vector4();
+               /*   plane1.applyMatrix( plane.matrixWorld  );
+                  cube.position.x = point.x;
+                  cube.position.y = point.y;
+                  cube.position.z = point.z - 2;
+              */
+              dae.position.x = point.x;
+              dae.position.y = point.y - 10;
+              dae.position.z = point.z + 16;
+
+                  console.log(plane.matrixWorld);
+                  //floor.position.y = point.y - 8;
+                 // scene.add(plane1);
+               //   camera.remove(plane);
+
+            //  }
+              }
+
+
+
+
+              /*var data = imageData.data;
+
+              for (var i = 0; i < data.length; i += 4) {
+                  var red = data[i],
+                          green = data[i + 1],
+                          blue = data[i + 2],
+                          luminance = ((red * 299) + (green * 587) + (blue * 114)) / 1000; // Gives a value from 0 - 255
+
+
+                  data[i] = red;
+                  data[i + 1] = green;
+                  data[i + 2] = blue;
+                  if (luminance > 175) {
+                      red = 255;
+                      green = 255;
+                      blue = 255;
+                  } else if (luminance >= 100 && luminance <= 175) {
+                      red = 190;
+                      green = 190;
+                      blue = 190;
+                  } else if (luminance < 100) {
+                      red = 0;
+                      green = 0;
+                      blue = 0;
+                  }
+
+                  data[i] = red;
+                  data[i + 1] = green;
+                  data[i + 2] = blue;
+              }
+
+              imageData.data = data;
+
+              cameraImageContext.putImageData(imageData, 0, 0);
+
+             // console.log(camera);
+          }
+*/
+          leftCamContext.drawImage(cameraImage, 0, 0, cameraImage.width, cameraImage.height, 0, 0, leftcam.width, leftcam.height);
+          rightCamContext.drawImage(cameraImage, 0, 0, cameraImage.width, cameraImage.height, 0, 0, leftcam.width, leftcam.height);
+
+
+
+        /*
+        var markers = detector.detect(imageData);
+        if (markers.length > 0) {
+          console.log(markers[0].corners.length);
+          var modelSize = 35.0;
+
+          var corners = [];
+          for (var j = 0; j < markers[0].corners.length; ++j) {
+            corners.push({
+              x: markers[0].corners[j].x - (cameraImage.width/ 2),
+              y: (cameraImage.height / 2) - markers[0].corners[j].y
+            })
+          }
+          console.log(corners);
+          // compute the pose from the canvas
+          var posit = new POS.Posit(modelSize, cameraImage.width);
+          var pose = posit.pose(corners);
+          console.log(pose);
+        } */
+      }
+    }
+
+
+
+    function update(dt) {
+        resize();
+        camera.updateProjectionMatrix();
+        controls.update(dt);
+    }
+
+    function render(dt) {
+
+        camCapture();
+
+        effect.render(scene, camera);
+    }
+
+
+
+
+
+    function markerHandler(event) {
+        data = event.data;
+        //console.log(data.malength);
+        if( parseInt(data.markers.length) > 0 )
+        {
+            console.log(data.markers[0].corners.length);
+            seen = true;
+        }
+        else seen = false;
+
+        working = false;
+        //console.log("Opening mutex lock");
+    }
+
+    window.addEventListener("DOMContentLoaded", function() {
+      var getUserMedia = navigator.getUserMedia ? function(a, b, c) { navigator.getUserMedia(a, b, c); } : (navigator.webkitGetUserMedia ? function(a, b, c) { navigator.webkitGetUserMedia(a, b, c); } : null);
+      if (getUserMedia != null) {
+        MediaStreamTrack.getSources(function(sourceInfos) {
+          var videoSource = null;
+          for (var i = 0; i < sourceInfos.length; i++) {
+            var sourceInfo = sourceInfos[i];
+            //console.log('source: ', sourceInfo);
+            if (sourceInfo.kind === 'video') {
+              //console.log(sourceInfo.id, sourceInfo.label || 'camera');
+              videoSource = sourceInfo.id;
+              //break; // uncomment for selecting the first one.
+            }
+          }
+
+          if (videoSource != null)
+          {
+            getUserMedia.call(this,
+              { 
+                video: {
+                  optional: [
+                    { sourceId: videoSource },
+                    { minWidth: 640 },
+                    { maxWidth: 640 },
+                    { minHeight: 480 },
+                    { maxHeight: 480 }
+                  ]
+                },
+                //video: true, 
+                audio: false 
+              }, 
+              function(stream) {
+                  video.src = window.URL.createObjectURL(stream);
+                  video.play();
+
+                  videoPlaying = true;
+              },
+              function(error) {
+                  videoPlaying = false;
+              }
+            );
+          }
+        });
+      }
+    });
+
+
+
+    function drawCorners(markers){
+        var corners, corner, i, j;
+
+        context.lineWidth = 3;
+
+        for (i = 0; i < markers.length; ++ i){
+            corners = markers[i].corners;
+
+            context.strokeStyle = "red";
+            context.beginPath();
+
+            for (j = 0; j < corners.length; ++ j){
+                corner = corners[j];
+                context.moveTo(corner.x, corner.y);
+                corner = corners[(j + 1) % corners.length];
+                context.lineTo(corner.x, corner.y);
+            }
+
+            context.stroke();
+            context.closePath();
+
+            context.strokeStyle = "green";
+            context.strokeRect(corners[0].x - 2, corners[0].y - 2, 4, 4);
+        }
+    }
+
+    function addModelToScene( geometry, materials )
+    {
+
+
+        material = new THREE.MeshFaceMaterial( materials );
+        greenguy = new THREE.Mesh( geometry, material );
+        scene.add( greenguy );
+        greenguy.position.x = 5;
+    }
+
+    
+  </script>
+  </body>
+</html>
